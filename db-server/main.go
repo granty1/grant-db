@@ -1,13 +1,19 @@
 package main
 
 import (
+	"grant-db/config"
 	"grant-db/kv"
 	"grant-db/server"
+	"log"
 )
 
 var (
 	storage kv.Storage
+
+	srv *server.Server
+	cfg *config.Config
 )
+
 func main() {
 	//TODO 参数解析 -> flags ....
 
@@ -16,7 +22,7 @@ func main() {
 	//TODO 注册数据统计Metrics
 
 	//TODO 加载配置，初始目录结构
-
+	cfg = config.InitConfig()
 	//TODO 设置全局参数
 
 	//TODO 初始化日志模块
@@ -35,11 +41,17 @@ func main() {
 	//TODO 监听退出信号
 
 	//TODO 启动服务器
+	runServer()
 }
 
 func createServer() {
 	//TODO get config
-	driver := server.NewGrantDBDriver(storage)
+	//driver := server.NewGrantDBDriver(storage)
 	//TODO create server
+	srv = server.NewServer(cfg)
 	//TODO clean domain and storage if create server error
+}
+
+func runServer() {
+	log.Fatalln(srv.Run())
 }
