@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"grant-db/config"
+	"io"
 	"log"
 	"net"
 )
@@ -54,12 +55,17 @@ func (s *Server) onConn(cc *clientConn) {
 	ctx := context.WithValue(context.Background(), "id", cc.connectionID)
 	//TODO Grant: Hand Shake With MySQL Protocol
 	if err := cc.handshake(ctx); err != nil {
-
+		log.Println("handshake error:", err.Error())
+		return
 	}
 	//TODO Grant: Conn Run
 	for {
 		buf := make([]byte, 16)
 		n, err := cc.conn.Read(buf)
+		if err == io.EOF {
+			log.Printf("[id:%d] connection closed!\n", cc.connectionID)
+			return
+		}
 		if err != nil {
 			log.Println("read buf fail:", err.Error())
 		}

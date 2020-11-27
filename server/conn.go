@@ -1,9 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
 	"grant-db/mysql"
 	"grant-db/util/customrand"
+	"io"
+	"log"
 	"math/rand"
 	"net"
 )
@@ -37,15 +42,35 @@ func (cc *clientConn) handshake(ctx context.Context) error {
 	// 1. Initial Handshake
 	// Server -> Client
 	if err := cc.writeInitialHandshake(ctx); err != nil {
+		if err == io.EOF {
+			log.Printf("cann't send hankshake due to connection has been ")
+		}
 		return err
 	}
 
 	// 2. Login Authentication
 	// Client -> Server
-
-
+	if err := cc.readOptionalSSLRequestAndHandshakeResponse(ctx); err != nil {
+		return err
+	}
 	// 3. Response Authentication Result
 	// Server -> Client
+	data := make([]byte, 4, 32)
+	// OKHeader => 0x00
+	data = append(data, 0x00)
+	data = append(data, 0, 0)
+	data = append(data, byte(0x0002), byte(0x0002>>8))
+	data = append(data, 0, 0)
+	err := cc.writePacket(data)
+	cc.pkt.sequence = 0
+	if err != nil {
+		return err
+	}
+	err = cc.flush(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (cc *clientConn) writeInitialHandshake(ctx context.Context) error {
@@ -90,10 +115,89 @@ func (cc *clientConn) writeInitialHandshake(ctx context.Context) error {
 	return cc.flush(ctx)
 }
 
+func (cc *clientConn) readOptionalSSLRequestAndHandshakeResponse(ctx context.Context) error {
+	data, err := cc.pkt.readPacket()
+	if err != nil {
+		if err == io.EOF {
+			log.Printf("cann't send hankshake due to connection has been ")
+		}
+		return err
+	}
+
+	var resp handshakeResponse41
+	var pos int
+	if len(data) < 2 {
+		log.Println("read response of client in handshake length is too short")
+		return errors.New("response of client is too short")
+	}
+
+	capability := uint32(binary.LittleEndian.Uint16(data[:2]))
+	log.Println(capability & (1 << 9))
+
+	pos, err = parseHandshakeResponseHeader(ctx, &resp, data)
+	if err != nil {
+		return err
+	}
+
+	//TODO Grant: Client SSL Configuration
+
+	// read packet body
+	err = parseHandshakeResponseBody(ctx, &resp, data, pos)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (cc *clientConn) writePacket(data []byte) error {
 	return cc.pkt.writePacket(data)
 }
 
+func (cc *clientConn) readPacket() ([]byte, error) {
+	return cc.pkt.readPacket()
+}
+
 func (cc *clientConn) flush(ctx context.Context) error {
 	return cc.pkt.flush()
+}
+
+type handshakeResponse41 struct {
+	Capability uint32
+	Collation  uint8
+	User       string
+	DBName     string
+	Auth       []byte
+	AuthPlugin string
+	Attrs      map[string]string
+}
+
+func parseHandshakeResponseHeader(ctx context.Context, resp *handshakeResponse41, data []byte) (parseBytes int, err error) {
+	//4              capability flags, CLIENT_PROTOCOL_41 always set
+	//4              max-packet size
+	//1              character set
+	//string[23]     reserved (all [0])
+	//string[NUL]    username
+	if len(data) < 4+4+1+23 {
+		return 0, errors.New("response packet format error")
+	}
+	offset := 0
+	capability := binary.LittleEndian.Uint32(data[:4])
+	resp.Capability = capability
+	offset += 4
+	//[4] max packet size
+	offset += 4
+	//[1] character set
+	resp.Collation = data[offset]
+	offset++
+	//[23] 00
+	offset += 23
+	return offset, nil
+}
+
+func parseHandshakeResponseBody(ctx context.Context, resp *handshakeResponse41, data []byte, offset int) error {
+	resp.User = string(data[offset : offset+bytes.IndexByte(data[offset:], 0)])
+	offset += len(resp.User) + 1
+	log.Println("username:" + resp.User)
+	return nil
 }
