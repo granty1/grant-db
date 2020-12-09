@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"github.com/pingcap/parser/ast"
 	"grant-db/mysql"
 	"grant-db/util/customrand"
 	"grant-db/util/hack"
@@ -28,6 +29,7 @@ type clientConn struct {
 	collation    uint8
 	attrs        map[string]string
 	lastPacket   []byte
+	ctx          *GrantDBContext
 }
 
 func newClientConn(s *Server, conn net.Conn) *clientConn {
@@ -68,7 +70,27 @@ func (cc *clientConn) run(ctx context.Context) {
 	}
 }
 
-func (cc *clientConn) handleQuery(ctx context.Context, cmd string) error {
+func (cc *clientConn) handleStmt(ctx context.Context, stmt ast.StmtNode, warns interface{}) error {
+	return nil
+}
+
+func (cc *clientConn) handleQuery(ctx context.Context, sql string) error {
+	stmts, err := cc.ctx.Parse(ctx, sql)
+	if err != nil {
+		log.Println("parse sql error:", err.Error())
+		return err
+	}
+
+	if len(stmts) == 0 {
+		return cc.writeOk(ctx)
+	}
+
+	// current only support single-statement
+	stmt := stmts[0]
+	if err := cc.handleStmt(ctx, stmt, nil); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -80,7 +102,7 @@ func (cc *clientConn) dispatch(ctx context.Context, data []byte) error {
 	case mysql.CmdQuit:
 		return io.EOF
 	case mysql.CmdQuery:
-		if len(data) >0 && data[len(data)-1] == 0 {
+		if len(data) > 0 && data[len(data)-1] == 0 {
 			data = data[:len(data)-1]
 		}
 		cmdStr := string(hack.String(data))
@@ -239,11 +261,38 @@ func (cc *clientConn) readOptionalSSLRequestAndHandshakeResponse(ctx context.Con
 }
 
 func (cc *clientConn) openSessionAndDoAuth(auth []byte) error {
+	//TODO Grant: TLS State Connection
+	var err error
+	cc.ctx, err = cc.server.driver.OpenCtx(cc.connectionID, cc.capability, cc.collation, cc.dbname, nil)
+	if err != nil {
+		return nil
+	}
+
 	return nil
 }
 
 func (cc *clientConn) writePacket(data []byte) error {
 	return cc.pkt.writePacket(data)
+}
+
+func (cc *clientConn) writeOk(ctx context.Context) error {
+	return cc.writeOkWith(ctx, "", 0, 0, cc.ctx.Status(), 0)
+}
+
+func (cc *clientConn) writeOkWith(ctx context.Context, msg string, affectedRows, lastInsertID uint64, status, warnCnt uint16) error {
+	data := make([]byte, 4, 32)
+	data = append(data, mysql.OKHeader)
+	data = dumpLengthEncodedInt(data, affectedRows)
+	data = dumpLengthEncodedInt(data, lastInsertID)
+	data = dumpUint16(data, status)
+	data = dumpUint16(data, warnCnt)
+
+	err := cc.writePacket(data)
+	if err != nil {
+		return err
+	}
+
+	return cc.flush(ctx)
 }
 
 func (cc *clientConn) readPacket() ([]byte, error) {
@@ -351,4 +400,50 @@ func parseAttrs(data []byte) (map[string]string, error) {
 		attrs[string(key)] = string(value)
 	}
 	return attrs, nil
+}
+
+// parse unt64 data into []byte
+func dumpLengthEncodedInt(buffer []byte, n uint64) []byte {
+	switch {
+	case n <= 250:
+		return append(buffer, byte(n))
+
+	case n <= 0xffff:
+		return append(buffer, 0xfc, byte(n), byte(n>>8))
+
+	case n <= 0xffffff:
+		return append(buffer, 0xfd, byte(n), byte(n>>8), byte(n>>16))
+
+	case n <= 0xffffffffffffffff:
+		return append(buffer, 0xfe, byte(n), byte(n>>8), byte(n>>16), byte(n>>24),
+			byte(n>>32), byte(n>>40), byte(n>>48), byte(n>>56))
+	}
+
+	return buffer
+}
+
+func dumpUint16(buffer []byte, n uint16) []byte {
+	buffer = append(buffer, byte(n))
+	buffer = append(buffer, byte(n>>8))
+	return buffer
+}
+
+func dumpUint32(buffer []byte, n uint32) []byte {
+	buffer = append(buffer, byte(n))
+	buffer = append(buffer, byte(n>>8))
+	buffer = append(buffer, byte(n>>16))
+	buffer = append(buffer, byte(n>>24))
+	return buffer
+}
+
+func dumpUint64(buffer []byte, n uint64) []byte {
+	buffer = append(buffer, byte(n))
+	buffer = append(buffer, byte(n>>8))
+	buffer = append(buffer, byte(n>>16))
+	buffer = append(buffer, byte(n>>24))
+	buffer = append(buffer, byte(n>>32))
+	buffer = append(buffer, byte(n>>40))
+	buffer = append(buffer, byte(n>>48))
+	buffer = append(buffer, byte(n>>56))
+	return buffer
 }
