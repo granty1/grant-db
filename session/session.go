@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	 _ "github.com/pingcap/tidb/types/parser_driver"
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/ast"
 	"grant-db/kv"

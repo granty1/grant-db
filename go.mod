@@ -3,10 +3,6 @@ module grant-db
 go 1.14
 
 require (
-	github.com/golang/protobuf v1.4.3 // indirect
-	github.com/pingcap/errors v0.11.4 // indirect
-	github.com/pingcap/parser v3.1.2+incompatible
-	github.com/pingcap/tipb v0.0.0-20201204064222-61086fd8a335 // indirect
-	github.com/sirupsen/logrus v1.7.0 // indirect
-	golang.org/x/text v0.3.4 // indirect
+	github.com/pingcap/parser v0.0.0-20200623164729-3a18f1e5dceb
+	github.com/pingcap/tidb v1.1.0-beta.0.20200630082100-328b6d0a955c
 )
