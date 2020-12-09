@@ -7,10 +7,12 @@ import (
 	"errors"
 	"grant-db/mysql"
 	"grant-db/util/customrand"
+	"grant-db/util/hack"
 	"io"
 	"log"
 	"math/rand"
 	"net"
+	"time"
 )
 
 type clientConn struct {
@@ -20,6 +22,12 @@ type clientConn struct {
 	connectionID int64
 	server       *Server
 	salt         []byte
+	capability   uint32
+	user         string
+	dbname       string
+	collation    uint8
+	attrs        map[string]string
+	lastPacket   []byte
 }
 
 func newClientConn(s *Server, conn net.Conn) *clientConn {
@@ -36,6 +44,71 @@ func newClientConn(s *Server, conn net.Conn) *clientConn {
 	}
 	cc.salt = customrand.Buf(20)
 	return cc
+}
+
+func (cc *clientConn) run(ctx context.Context) {
+	const size = 4096
+	for {
+		cc.pkt.setReadTimeout(28800 * time.Second)
+		//start := time.Now()
+		data, err := cc.readPacket()
+		if err != nil {
+			log.Printf("[connection:%d] read packet error:%s\n", cc.connectionID, err.Error())
+		}
+
+		if err := cc.dispatch(ctx, data); err != nil {
+			if err == io.EOF {
+				log.Println("connection quit.")
+				return
+			}
+			log.Println("connection quit, dispatch error:", err.Error())
+			break
+		}
+		cc.pkt.sequence = 0
+	}
+}
+
+func (cc *clientConn) handleQuery(ctx context.Context, cmd string) error {
+	return nil
+}
+
+func (cc *clientConn) dispatch(ctx context.Context, data []byte) error {
+	cc.lastPacket = data
+	cmd, data := data[0], data[1:]
+
+	switch cmd {
+	case mysql.CmdQuit:
+		return io.EOF
+	case mysql.CmdQuery:
+		if len(data) >0 && data[len(data)-1] == 0 {
+			data = data[:len(data)-1]
+		}
+		cmdStr := string(hack.String(data))
+		return cc.handleQuery(ctx, cmdStr)
+	}
+	return nil
+}
+
+func (cc *clientConn) authSwitchRequest(ctx context.Context) ([]byte, error) {
+	len := 1 + len("mysql_native_password") + 1 + len(cc.salt) + 1
+	data := make([]byte, 4, len)
+	data = append(data, 0xfe)
+	data = append(data, []byte("mysql_native_password")...)
+	data = append(data, byte(0x00))
+	data = append(data, cc.salt...)
+	data = append(data, 0)
+	err := cc.writePacket(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := cc.flush(ctx); err != nil {
+		return nil, err
+	}
+	resp, err := cc.readPacket()
+	if err != nil {
+		return nil, err
+	}
+	return resp, err
 }
 
 func (cc *clientConn) handshake(ctx context.Context) error {
@@ -147,6 +220,25 @@ func (cc *clientConn) readOptionalSSLRequestAndHandshakeResponse(ctx context.Con
 		return err
 	}
 
+	if resp.AuthPlugin == "caching_sha2_password" {
+		resp.Auth, err = cc.authSwitchRequest(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
+	cc.capability = resp.Capability
+	cc.dbname = resp.DBName
+	cc.collation = resp.Collation
+	cc.attrs = resp.Attrs
+
+	if err := cc.openSessionAndDoAuth(resp.Auth); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (cc *clientConn) openSessionAndDoAuth(auth []byte) error {
 	return nil
 }
 
@@ -198,6 +290,65 @@ func parseHandshakeResponseHeader(ctx context.Context, resp *handshakeResponse41
 func parseHandshakeResponseBody(ctx context.Context, resp *handshakeResponse41, data []byte, offset int) error {
 	resp.User = string(data[offset : offset+bytes.IndexByte(data[offset:], 0)])
 	offset += len(resp.User) + 1
-	log.Println("username:" + resp.User)
+
+	if resp.Capability&(1<<21) > 0 {
+		num, null, off := parseLengthEncodedInt(data[offset:])
+		offset += off
+		if !null {
+			resp.Auth = data[offset : offset+int(num)]
+			offset += int(num)
+		}
+	} else {
+		//TODO Grant: Client Secure Connection
+		//TODO Grant: Other Handle
+	}
+	if resp.Capability&1<<3 > 0 {
+		if len(data[offset:]) > 0 {
+			idx := bytes.IndexByte(data[offset:], 0)
+			resp.DBName = string(data[offset : offset+idx])
+			offset += idx + 1
+		}
+	}
+	if resp.Capability&1<<19 > 0 {
+		idx := bytes.IndexByte(data[offset:], 0)
+		if idx > 0 {
+			resp.AuthPlugin = string(data[offset : offset+idx])
+		}
+		offset += idx + 1
+	}
+	if resp.Capability&1<<20 > 0 {
+		if len(data[offset:]) == 0 {
+			return nil
+		}
+		if num, null, off := parseLengthEncodedInt(data[offset:]); !null {
+			offset += off
+			rows := data[offset : offset+int(num)]
+			attrs, err := parseAttrs(rows)
+			if err != nil {
+				return err
+			}
+			resp.Attrs = attrs
+		}
+	}
 	return nil
+}
+
+func parseAttrs(data []byte) (map[string]string, error) {
+	attrs := make(map[string]string)
+	pos := 0
+	for pos < len(data) {
+		key, _, off, err := parseLengthEncodedBytes(data[pos:])
+		if err != nil {
+			return attrs, err
+		}
+		pos += off
+		value, _, off, err := parseLengthEncodedBytes(data[pos:])
+		if err != nil {
+			return attrs, err
+		}
+		pos += off
+
+		attrs[string(key)] = string(value)
+	}
+	return attrs, nil
 }

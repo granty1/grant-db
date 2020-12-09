@@ -33,8 +33,8 @@ func main() {
 
 	//TODO 启动Metrics
 
-	//TODO 创建存在引擎
-
+	//TODO 创建存储引擎
+	createStore()
 	//TODO 创建Server
 	createServer()
 
@@ -44,11 +44,15 @@ func main() {
 	runServer()
 }
 
+func createStore() {
+	storage = kv.NewStorage()
+}
+
 func createServer() {
 	//TODO get config
-	//driver := server.NewGrantDBDriver(storage)
+	driver := server.NewGrantDBDriver(storage)
 	//TODO create server
-	srv = server.NewServer(cfg)
+	srv = server.NewServer(cfg, driver)
 	//TODO clean domain and storage if create server error
 }
 

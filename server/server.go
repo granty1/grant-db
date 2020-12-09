@@ -3,23 +3,30 @@ package server
 import (
 	"context"
 	"grant-db/config"
-	"io"
 	"log"
 	"net"
+	"sync"
 )
 
 // Server define the db server
 type Server struct {
+	*sync.RWMutex
+
 	listener   net.Listener
 	cfg        *config.Config
 	capability uint32
+	driver     IDriver
+	clients map[int64]*clientConn
 }
 
-func NewServer(cfg *config.Config) *Server {
+func NewServer(cfg *config.Config, driver IDriver) *Server {
 	s := &Server{
 		cfg: cfg,
 		// default capability
 		capability: 1812111,
+		driver:     driver,
+		RWMutex:    &sync.RWMutex{},
+		clients:    make(map[int64]*clientConn),
 	}
 	var err error
 	if s.listener, err = net.Listen("tcp", "127.0.0.1:7878"); err == nil {
@@ -58,21 +65,14 @@ func (s *Server) onConn(cc *clientConn) {
 		log.Println("handshake error:", err.Error())
 		return
 	}
-	//TODO Grant: Conn Run
-	for {
-		buf := make([]byte, 16)
-		n, err := cc.conn.Read(buf)
-		if err == io.EOF {
-			log.Printf("[id:%d] connection closed!\n", cc.connectionID)
-			return
-		}
-		if err != nil {
-			log.Println("read buf fail:", err.Error())
-		}
+	// Record current connected clients
+	s.Lock()
+	s.clients[cc.connectionID] = cc
+	s.Unlock()
 
-		log.Printf("read size:%d, content:%s\n", n, string(buf))
+	cc.run(ctx)
 
-	}
+	log.Printf("[id:%d] connection closed\n", cc.connectionID)
 }
 
 func (s *Server) newConn(conn net.Conn) *clientConn {
