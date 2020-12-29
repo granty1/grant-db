@@ -41,7 +41,8 @@ type GrantDBContext struct {
 	//TODO Grant: GrantDBStatement
 }
 
-func (tc *GrantDBContext) ExecuteStmt(ctx context.Context, stmt ast.StmtNode) {
+func (tc *GrantDBContext) ExecuteStmt(ctx context.Context, stmt ast.StmtNode) (ResultSet, error) {
+	return nil, nil
 }
 
 type GrantDBStatement struct {
@@ -52,4 +53,7 @@ type GrantDBStatement struct {
 	ctx         *GrantDBContext
 	//TODO Grant: ResultSet
 	sql string
+}
+
+type grantResultSet struct {
 }

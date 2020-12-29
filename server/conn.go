@@ -21,6 +21,7 @@ type clientConn struct {
 	bufReadConn  *bufferedReadConn
 	conn         net.Conn
 	connectionID int64
+	remoteAddr   string
 	server       *Server
 	salt         []byte
 	capability   uint32
@@ -37,6 +38,7 @@ func newClientConn(s *Server, conn net.Conn) *clientConn {
 		conn:         conn,
 		server:       s,
 		connectionID: rand.Int63(),
+		remoteAddr:   conn.RemoteAddr().String(),
 		bufReadConn:  newBufferedReadConn(conn),
 	}
 	if cc.pkt == nil {
@@ -60,7 +62,7 @@ func (cc *clientConn) run(ctx context.Context) {
 
 		if err := cc.dispatch(ctx, data); err != nil {
 			if err == io.EOF {
-				log.Println("connection quit.")
+				log.Println("client exit")
 				return
 			}
 			log.Println("connection quit, dispatch error:", err.Error())
@@ -70,7 +72,10 @@ func (cc *clientConn) run(ctx context.Context) {
 	}
 }
 
-func (cc *clientConn) handleStmt(ctx context.Context, stmt ast.StmtNode, warns interface{}) error {
+func (cc *clientConn) handleStmt(ctx context.Context, stmt ast.StmtNode, warns interface{}, last bool) error {
+
+	cc.ctx.ExecuteStmt(ctx, stmt)
+
 	return nil
 }
 
@@ -84,14 +89,13 @@ func (cc *clientConn) handleQuery(ctx context.Context, sql string) error {
 	if len(stmts) == 0 {
 		return cc.writeOk(ctx)
 	}
-
 	// current only support single-statement
 	stmt := stmts[0]
-	if err := cc.handleStmt(ctx, stmt, nil); err != nil {
+	if err := cc.handleStmt(ctx, stmt, nil, true); err != nil {
 		return err
 	}
 
-	return nil
+	return cc.writeOk(ctx)
 }
 
 func (cc *clientConn) dispatch(ctx context.Context, data []byte) error {
@@ -106,6 +110,7 @@ func (cc *clientConn) dispatch(ctx context.Context, data []byte) error {
 			data = data[:len(data)-1]
 		}
 		cmdStr := string(hack.String(data))
+		log.Println("handle sql: ", cmdStr)
 		return cc.handleQuery(ctx, cmdStr)
 	}
 	return nil

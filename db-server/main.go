@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/google/gops/agent"
 	"grant-db/config"
 	"grant-db/kv"
 	"grant-db/server"
@@ -15,6 +16,11 @@ var (
 )
 
 func main() {
+	//TODO Grant: gops
+	if err := agent.Listen(agent.Options{}); err != nil {
+		log.Fatal(err)
+	}
+
 	//TODO 参数解析 -> flags ....
 
 	//TODO 注册存储引擎

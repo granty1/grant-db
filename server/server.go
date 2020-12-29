@@ -58,7 +58,7 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) onConn(cc *clientConn) {
-	log.Printf("[id:%d] connect!", cc.connectionID)
+	log.Printf("[id:%d][remote addr:%s] connect!", cc.connectionID, cc.remoteAddr)
 	ctx := context.WithValue(context.Background(), "id", cc.connectionID)
 	//TODO Grant: Hand Shake With MySQL Protocol
 	if err := cc.handshake(ctx); err != nil {
@@ -77,7 +77,7 @@ func (s *Server) onConn(cc *clientConn) {
 
 func (s *Server) newConn(conn net.Conn) *clientConn {
 	cc := newClientConn(s, conn)
-
+	conn.RemoteAddr()
 	//TODO Grant: Set Keep Alive
 
 	//TODO Grant: Set Salt Value
